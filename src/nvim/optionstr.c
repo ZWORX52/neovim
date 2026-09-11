@@ -2733,7 +2733,13 @@ const char *did_set_completepopup(optset_T *args)
   }
 
   win_float_close(kWinInfo);
-  return NULL;
+
+  OptKeyDict_cpp *v = opt_keyset(p_cpp, opt_idx, NULL);
+  if (HAS_KEY(v, cpp, where) && strlen(v->where) > 4) {
+    return field_value_err(args->os_errbuf, args->os_errbuflen, e_wrong_number_of_characters_for_field_str, "dir");
+  }
+
+  return did_set_option_listflag(v->where, "nsew", args->os_errbuf, args->os_errbuflen);
 }
 
 /// Expand the sub-options of 'previewpopup' and 'completepopup'.
@@ -2750,6 +2756,9 @@ int expand_set_popupoption(optexpand_T *args, int *numMatches, char ***matches)
     if (args->oe_idx == kOptCompletepopup && completing_value_for_subopt(args, "align")) {
       return expand_set_opt_string(args, opt_cpp_align_values,
                                    ARRAY_SIZE(opt_cpp_align_values) - 1, numMatches, matches);
+    }
+    if (args->oe_idx == kOptCompletepopup && completing_value_for_subopt(args, "where")) {
+      return expand_set_opt_listflag(args, "nsew", numMatches, matches);
     }
     return FAIL;    // "height:"/"width:" = number, nothing to complete.
   }

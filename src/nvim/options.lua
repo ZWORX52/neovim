@@ -1770,6 +1770,7 @@ local options = {
           },
           { 'height', 'num' },
           { 'width', 'num' },
+          { 'where', 'str' },
         },
       },
       expand_cb = 'expand_set_popupoption',
@@ -1794,9 +1795,13 @@ local options = {
         		Setting it also lifts the minimum of 10 columns
         		below which the info window is hidden, as long as
         		the requested width fits.
+		where	Up to four of "nsew" (default).  Order of preference for
+			where the info window should be placed relative to the
+			popupmenu.  The first direction in this list with enough
+			space is chosen.
 
         Example: >vim
-        	set completepopup=align:menu,height:10,width:60,border:rounded
+        	set completepopup=align:menu,height:10,width:60,border:rounded,where:nsew
         <
       ]=],
       full_name = 'completepopup',

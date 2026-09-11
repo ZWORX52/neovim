@@ -993,30 +993,101 @@ void pum_set_align(PumAlign align)
   pum_info_align = align;
 }
 
-/// Adjust the position and size of the floating info window per 'completepopup'.
-static bool pum_adjust_info_position(win_T *wp, int width)
+/// Adjust floating info preview window position, respecting 'completepopup'
+static bool pum_adjust_info_position(win_T *wp, int textwidth)
 {
-  int border_w = win_border_width(wp);
-  int border_h = win_border_height(wp);
+  linenr_T count = wp->w_buffer->b_ml.ml_line_count;
+  int textheight = plines_m_win(wp, wp->w_topline, count, Rows);
+
+  int border_width = win_border_width(wp);
+  int border_height = win_border_height(wp);
 
   OptKeyDict_cpp *cpp = opt_keyset(p_cpp, kOptCompletepopup, NULL);
   int width_opt = HAS_KEY(cpp, cpp, width) ? (int)cpp->width : 0;
   int height_opt = HAS_KEY(cpp, cpp, height) ? (int)cpp->height : 0;
-  if (width_opt > 0) {
-    width = MIN(width, width_opt);
+  const char *default_prio = "nsew";
+  char *priority_opt = HAS_KEY(cpp, cpp, where) ? cpp->where : default_prio;
+
+  int prio_as_indices[4];
+  for (int i = 0; i < 4; i++) {
+    prio_as_indices[i] = strchr(default_prio, cpp->where[i]) - default_prio;
   }
 
-  int col = pum_col + pum_width + 1 + MAX(pum_border_width(), pum_scrollbar);
-  int right_extra = Columns - col - border_w;
-  int left_extra = pum_col - 2 - border_w;
+  // try to position a popup with these dimensions
+  int wantwidth = MIN(width_opt, textwidth);
+  int wantheight = MIN(height_opt, textheight);
 
-  // Prefer the side that fits; if neither does, take the wider one.
-  bool place_in_right = right_extra > width
-                        || (left_extra <= width && right_extra > left_extra);
-  int avail = place_in_right ? right_extra : left_extra;
+  int epad = MAX(pum_border_width(), pum_scrollbar) + border_width;
+  int spad = pum_border_width() + border_height;
 
-  // "width" in 'completepopup' lifts the 10-column minimum when it fits.
-  if (avail < 10 && !(width_opt > 0 && avail > width_opt)) {
+  int sel_off = pum_info_align == kPumAlignMenu ? 0 : MIN(MAX(pum_selected - pum_first, 0), pum_height - 1);
+
+  int ns_col = pum_col - (wantwidth > Columns - pum_col) ? wantwidth - (Columns - pum_col) : 0;
+  int ew_row = pum_row - (wantheight > Rows - pum_row - sel_off) ? wantheight - (Rows - pum_row - sel_off) : 0;
+  ns_col = MIN(MAX(ns_col, 0), Columns);
+  ew_row = MIN(MAX(ew_row, 0), Rows);
+  int ns_width = MIN(Columns - ns_col, wantwidth);
+  int ew_height = MIN(Rows - ew_row, wantheight);
+
+  int north_space = pum_row - 1 - (pum_above ? 0 : 1) - border_height;
+  int south_space = Rows - (pum_row + pum_height + (pum_above ? 1 : 0) + spad);
+  int west_space = pum_col - 1 - border_width;
+  int east_space = Columns - (pum_col + pum_width + epad);
+
+  struct {
+    int want;
+    int have;
+
+    int row, col;
+    int height, width;
+    FloatAnchor anchor;
+  } candidates[4] = {
+    // north
+    {
+      .have = north_space,
+      .want = wantheight,
+      .row = north_space,
+      .col = ns_col,
+      .height = MIN(north_space, wantheight),
+      .width = ns_width,
+      .anchor = kFloatAnchorSouth
+    },
+
+    // south
+    {
+      .have = south_space,
+      .want = wantheight,
+      .row = Rows - south_space,
+      .col = ns_col,
+      .height = MIN(south_space, wantheight),
+      .width = ns_width,
+      .anchor = 0
+    },
+
+    // east
+    {
+      .have = east_space,
+      .want = wantwidth,
+      .row = ew_row,
+      .col = Columns - east_space,
+      .height = ew_height,
+      .width = MIN(east_space, wantwidth),
+      .anchor = 0
+    },
+
+    // west
+    {
+      .have = west_space,
+      .want = wantwidth,
+      .row = ew_row,
+      .col = west_space,
+      .height = ew_height,
+      .width = MIN(west_space, wantwidth),
+      .anchor = kFloatAnchorEast
+    }
+  };
+
+  if (most < (vertical ? 5 : 15)) {
     if (!wp->w_config.hide) {
       wp->w_config.hide = true;
       win_config_float(wp, wp->w_config);
@@ -1024,38 +1095,8 @@ static bool pum_adjust_info_position(win_T *wp, int width)
     return false;
   }
 
-  wp->w_config.width = MIN(width, avail);
-  wp->w_config.col = place_in_right
-                     ? col - 1
-                     : pum_col - wp->w_config.width - border_w - 1;
-
-  int height = win_float_text_height(wp, wp->w_topline, wp->w_config.width);
-  if (height_opt > 0) {
-    height = MIN(height, height_opt);
-  }
-
-  // The screen row the info lines up with: the menu's top row, or the selected item.
-  bool menu_align = pum_info_align == kPumAlignMenu;
-  int line = menu_align ? pum_row
-                        : pum_row + MIN(MAX(pum_selected - pum_first, 0), pum_height - 1);
-
-  int wantline = line - wp->w_border_adj[0] + 1;
-  int space_below = Rows - (int)p_ch - wantline + 1;
-  bool bottom_aligned = height + border_h > space_below
-                        && (menu_align ? wantline - 1 > space_below * 2
-                                       : wantline * 2 > Rows);
-
-  // When flipped, "align:menu" anchors to the menu's bottom row so it covers the
-  // menu instead of floating above it.
-  int bot = menu_align ? pum_row + pum_height - 1 : line;
-  int anchor = bottom_aligned ? kFloatAnchorSouth : 0;  // NW when not flipped
-  int row = bottom_aligned ? bot - wp->w_border_adj[0] + 1   // exclusive outer bottom
-                           : line - wp->w_border_adj[0];     // outer top
-
-  int space = bottom_aligned ? row : Rows - (int)p_ch - row;
-  wp->w_config.height = MAX(1, MIN(height, space - border_h));
-  wp->w_config.anchor = anchor;
-  wp->w_config.row = row;
+  wp->w_view_width = wp->w_config.width;
+  wp->w_view_height = wp->w_config.height;
   wp->w_config.hide = false;
   win_config_float(wp, wp->w_config);
   return true;
